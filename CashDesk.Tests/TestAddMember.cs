@@ -15,6 +15,7 @@ namespace CashDesk.Tests
             }
         }
 
+
         [Fact]
         public async Task AddMember()
         {
