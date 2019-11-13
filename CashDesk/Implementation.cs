@@ -4,12 +4,14 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using static CashDesk.Model;
+
 namespace CashDesk
 {
     /// <inheritdoc />
     public class DataAccess : IDataAccess
     {
         private CashDeskDataContext dataContext;
+
         private void ThrowIfNotInitialized()
         {
             // A user has to call InitializeDatabaseAsync before calling any other method of the class.
@@ -18,6 +20,7 @@ namespace CashDesk
                 throw new InvalidOperationException("Not initialized");
             }
         }
+
         /// <inheritdoc />
         public Task InitializeDatabaseAsync()
         {
@@ -26,6 +29,7 @@ namespace CashDesk
                 // InitializeDatabaseAsync has already been called
                 throw new InvalidOperationException("Already initialized");
             }
+
             dataContext = new CashDeskDataContext();
             return Task.CompletedTask;
         }
@@ -34,6 +38,7 @@ namespace CashDesk
         public async Task<int> AddMemberAsync(string firstName, string lastName, DateTime birthday)
         {
             ThrowIfNotInitialized();
+
             if (string.IsNullOrEmpty(firstName))
             {
                 throw new ArgumentException("Must not be null or empty", nameof(firstName));
@@ -43,10 +48,19 @@ namespace CashDesk
             {
                 throw new ArgumentException("Must not be null or empty", nameof(lastName));
             }
+
             if (await dataContext.Members.AnyAsync(m => m.LastName == lastName))
             {
-                throw new DuplicateNameException("Lastname already exists in database");
+                // Member with the same last name already exists.
+                throw new DuplicateNameException();
+
+                // Note that we cannot rely on EFCore's InMemory provider to throw an exception
+                // if the duplicate last names are insted even if we create a unique key.
+                // InMemory is NOT a full relational database. A real database like SQL Server
+                // would throw an exception. For details see:
+                // https://docs.microsoft.com/en-us/ef/core/miscellaneous/testing/in-memory#inmemory-is-not-a-relational-database
             }
+
             var newMember = new Member
             {
                 FirstName = firstName,
@@ -54,7 +68,9 @@ namespace CashDesk
                 Birthday = birthday
             };
             dataContext.Members.Add(newMember);
+
             await dataContext.SaveChangesAsync();
+
             return newMember.MemberNumber;
         }
 
@@ -62,6 +78,7 @@ namespace CashDesk
         public async Task DeleteMemberAsync(int memberNumber)
         {
             ThrowIfNotInitialized();
+
             Member member;
             try
             {
@@ -70,22 +87,26 @@ namespace CashDesk
             catch (InvalidOperationException)
             {
                 throw new ArgumentException();
-            } 
+            }
+
             dataContext.Members.Remove(member);
+
             await dataContext.SaveChangesAsync();
         }
+
 
         /// <inheritdoc />
         public async Task<IMembership> JoinMemberAsync(int memberNumber)
         {
             ThrowIfNotInitialized();
-            Membership newMembership;
+
             if (await dataContext.Memberships.AnyAsync(m => m.Member.MemberNumber == memberNumber
-                   && DateTime.Now >= m.Begin && DateTime.Now <= m.End))
+                    && DateTime.Now >= m.Begin && DateTime.Now <= m.End))
             {
                 throw new AlreadyMemberException();
             }
-            newMembership = new Membership
+
+            var newMembership = new Membership
             {
                 Member = await dataContext.Members.FirstAsync(m => m.MemberNumber == memberNumber),
                 Begin = DateTime.Now,
@@ -101,18 +122,22 @@ namespace CashDesk
         public async Task<IMembership> CancelMembershipAsync(int memberNumber)
         {
             ThrowIfNotInitialized();
+
             Membership membership;
             try
             {
                 membership = await dataContext.Memberships.FirstAsync(m => m.Member.MemberNumber == memberNumber
-                   && m.Member.Memberships.Count != 0 && m.End == DateTime.MaxValue);
+                    && m.End == DateTime.MaxValue);
             }
             catch (InvalidOperationException)
             {
                 throw new NoMemberException();
-            };
+            }
+
             membership.End = DateTime.Now;
+
             await dataContext.SaveChangesAsync();
+
             return membership;
         }
 
@@ -120,6 +145,7 @@ namespace CashDesk
         public async Task DepositAsync(int memberNumber, decimal amount)
         {
             ThrowIfNotInitialized();
+
             Member member;
             try
             {
@@ -129,20 +155,22 @@ namespace CashDesk
             {
                 throw new ArgumentException();
             }
+
             Membership membership;
             try
             {
                 membership = await dataContext.Memberships.FirstAsync(m => m.Member.MemberNumber == memberNumber
-                   && m.Member.Memberships.Count != 0 && m.End == DateTime.MaxValue);
+                    && DateTime.Now >= m.Begin && DateTime.Now <= m.End);
             }
             catch (InvalidOperationException)
             {
                 throw new NoMemberException();
-            };
+            }
+
             var newDeposit = new Deposit
             {
-                Amount = amount,
-                Membership = membership
+                Membership = membership,
+                Amount = amount
             };
             dataContext.Deposits.Add(newDeposit);
             await dataContext.SaveChangesAsync();
@@ -152,6 +180,7 @@ namespace CashDesk
         public async Task<IEnumerable<IDepositStatistics>> GetDepositStatisticsAsync()
         {
             ThrowIfNotInitialized();
+
             return (await dataContext.Deposits.Include("Membership.Member").ToArrayAsync())
                 .GroupBy(d => new { d.Membership.Begin.Year, d.Membership.Member })
                 .Select(i => new DepositStatistics
@@ -165,8 +194,7 @@ namespace CashDesk
         /// <inheritdoc />
         public void Dispose()
         {
-            ThrowIfNotInitialized();
-            if(dataContext != null)
+            if (dataContext != null)
             {
                 dataContext.Dispose();
                 dataContext = null;
